@@ -148,7 +148,7 @@ Gas is **never deducted on failed swaps** — if a swap reverts (slippage, liqui
 | **Frontend** | Next.js 16, React 19, TypeScript | User dashboard + audit log |
 | **UI** | Tailwind CSS 4 + shadcn/ui | Component library |
 | **Database** | Supabase (PostgreSQL) | User accounts, position metadata, audit log |
-| **Auth** | Supabase Auth | Email/password + OAuth |
+| **Auth** | Supabase Auth | Email/password |
 | **Key Management** | AWS KMS (ECDSA secp256k1) | Custodial key storage in HSM |
 | **Blockchain SDK** | @hashgraph/sdk 2.80 | Transaction construction + submission |
 | **Contract Tooling** | Hardhat + ethers v6 | Compilation, testing, deployment |
@@ -301,7 +301,7 @@ A dual-layer audit system tracks every signing operation for compliance and fore
 ```
 dca-swap/
 ├── app/                        # Next.js 16 app directory
-│   ├── (auth)/                 # Login, signup, OAuth callback
+│   ├── (auth)/                 # Login, signup
 │   ├── (dashboard)/            # Dashboard, DCA positions, audit log
 │   │   └── audit/              # Activity Log page
 │   └── actions/                # Server actions (auth, dca, vault, audit)
