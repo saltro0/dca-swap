@@ -40,12 +40,46 @@ export interface SessionUser {
 // Audit types
 export type OperationType =
   | 'account_create'
+  | 'dca_create'
+  | 'dca_stop'
+  | 'dca_withdraw'
+  | 'dca_topup'
+  | 'gas_deposit'
+  | 'gas_withdraw'
+  | 'unwrap_whbar'
   | 'transfer'
   | 'token_association'
   | 'token_approval'
   | 'key_rotation'
 
 export type OperationResult = 'pending' | 'success' | 'failed'
+
+export interface AuditLogEntry {
+  id: string
+  user_id: string
+  vault_key_id: string
+  op_type: OperationType
+  op_params: Record<string, unknown> | string | number | boolean | null
+  result: OperationResult
+  tx_hash: string | null
+  error_detail: string | null
+  client_ip: string | null
+  created_at: string
+}
+
+export interface AuditLogFilters {
+  type?: string
+  status?: string
+  dateFrom?: string
+  dateTo?: string
+}
+
+export interface AuditLogPagination {
+  total: number
+  limit: number
+  offset: number
+  hasMore: boolean
+}
 
 // DCA types
 export interface DCAPositionOnChain {
