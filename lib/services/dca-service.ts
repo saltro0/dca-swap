@@ -73,6 +73,7 @@ export class DCAService {
   /**
    * Rotate the Hedera account key.
    * Signs the AccountUpdateTransaction with BOTH old and new KMS keys.
+   * Custodial creator pays the tx fee so user account doesn't need HBAR.
    */
   async rotateAccountKey(
     userAccountId: string,
@@ -84,36 +85,36 @@ export class DCAService {
     const client = this.buildClient();
 
     try {
-      const payer = AccountId.fromString(userAccountId);
+      const userAccount = AccountId.fromString(userAccountId);
+      const operatorId = AccountId.fromString(process.env.CUSTODIAL_CREATOR_ACCOUNT_ID!);
 
-      // Compress new public key for Hedera (65-byte → 33-byte)
+      // Compress public keys for Hedera (65-byte → 33-byte)
+      const oldRawKey = Buffer.from(oldPublicKeyHex, "hex");
+      const oldPublicKey = PublicKey.fromBytesECDSA(compressPublicKey(oldRawKey));
+
       const newRawKey = Buffer.from(newPublicKeyHex, "hex");
-      const newCompressed = compressPublicKey(newRawKey);
-      const newPublicKey = PublicKey.fromBytesECDSA(newCompressed);
+      const newPublicKey = PublicKey.fromBytesECDSA(compressPublicKey(newRawKey));
 
-      // Build AccountUpdateTransaction with new key
+      // Build AccountUpdateTransaction — operator pays the fee
       const tx = new AccountUpdateTransaction()
-        .setAccountId(payer)
+        .setAccountId(userAccount)
         .setKey(newPublicKey)
-        .setTransactionId(TransactionId.generate(payer))
+        .setTransactionId(TransactionId.generate(operatorId))
         .freezeWith(client);
 
-      // Extract body bytes for manual signing
-      const bodyBytes = (tx as any)._signedTransactions.list[0].bodyBytes;
-      if (!bodyBytes) throw new Error("Failed to extract transaction body bytes");
-
-      // Sign with OLD key
-      const oldRawKey = Buffer.from(oldPublicKeyHex, "hex");
-      const oldCompressed = compressPublicKey(oldRawKey);
-      const oldPublicKey = PublicKey.fromBytesECDSA(oldCompressed);
-      const oldSig = await vault.signDigest(oldVaultKeyId, bodyBytes);
-      tx.addSignature(oldPublicKey, oldSig.signature);
+      // Sign with OLD key (current account key)
+      await tx.signWith(oldPublicKey, async (bytes: Uint8Array) => {
+        const result = await vault.signDigest(oldVaultKeyId, bytes);
+        return result.signature;
+      });
 
       // Sign with NEW key (required by Hedera for key changes)
-      const newSig = await vault.signDigest(newVaultKeyId, bodyBytes);
-      tx.addSignature(newPublicKey, newSig.signature);
+      await tx.signWith(newPublicKey, async (bytes: Uint8Array) => {
+        const result = await vault.signDigest(newVaultKeyId, bytes);
+        return result.signature;
+      });
 
-      // Execute
+      // Execute (operator signature added automatically by SDK)
       const response = await tx.execute(client);
       const receipt = await response.getReceipt(client);
 
