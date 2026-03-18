@@ -5,7 +5,6 @@ import { signUp } from '@/app/actions/auth'
 import { Eye, EyeOff, Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import Link from 'next/link'
-import { OAuthButton } from './oauth-button'
 
 export function SignupForm() {
   const [state, action, pending] = useActionState(signUp, null)
@@ -23,14 +22,6 @@ export function SignupForm() {
         <p className="text-[13px] text-text-muted mt-1">
           Get started with automated DCA
         </p>
-      </div>
-
-      <OAuthButton />
-
-      <div className="flex items-center gap-3 my-5">
-        <div className="h-px flex-1 bg-[#27272a]" />
-        <span className="text-[11px] text-text-muted uppercase tracking-[0.1em]">or</span>
-        <div className="h-px flex-1 bg-[#27272a]" />
       </div>
 
       <form action={action} className="flex flex-col gap-4">
