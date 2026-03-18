@@ -86,7 +86,6 @@ export class DCAService {
 
     try {
       const userAccount = AccountId.fromString(userAccountId);
-      const operatorId = AccountId.fromString(process.env.CUSTODIAL_CREATOR_ACCOUNT_ID!);
 
       // Compress public keys for Hedera (65-byte → 33-byte)
       const oldRawKey = Buffer.from(oldPublicKeyHex, "hex");
@@ -95,11 +94,11 @@ export class DCAService {
       const newRawKey = Buffer.from(newPublicKeyHex, "hex");
       const newPublicKey = PublicKey.fromBytesECDSA(compressPublicKey(newRawKey));
 
-      // Build AccountUpdateTransaction — operator pays the fee
+      // Build AccountUpdateTransaction — user pays the fee
       const tx = new AccountUpdateTransaction()
         .setAccountId(userAccount)
         .setKey(newPublicKey)
-        .setTransactionId(TransactionId.generate(operatorId))
+        .setTransactionId(TransactionId.generate(userAccount))
         .freezeWith(client);
 
       // Sign with OLD key (current account key)
