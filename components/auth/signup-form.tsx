@@ -12,10 +12,9 @@ export function SignupForm() {
 
   return (
     <div className="card-surface w-full max-w-[380px] p-7 animate-fade-up">
-      <div className="mb-6">
-        <div className="w-8 h-8 rounded-lg bg-[#2dd4bf] flex items-center justify-center mb-4">
-          <span className="text-sm font-bold text-[#09090b]">D</span>
-        </div>
+      <div className="mb-6 text-center">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/logo.png" alt="DCA Swap" width={40} height={40} className="rounded-xl mx-auto mb-4" />
         <h1 className="text-lg font-semibold tracking-[-0.02em] text-text-primary">
           Create your account
         </h1>
