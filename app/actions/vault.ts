@@ -4,6 +4,7 @@ import { requireUser, extractClientIp } from '@/lib/utils/guards'
 import { getAdminSupabase, DB } from '@/lib/supabase/admin'
 import { vault } from '@/lib/services/vault-service'
 import { ledger } from '@/lib/services/ledger-service'
+import { recordAuditLog } from '@/lib/utils/audit'
 import type { AccountSummary } from '@/types'
 
 /**
@@ -15,8 +16,14 @@ export async function provisionAccount(): Promise<{
   account?: AccountSummary
   error?: string
 }> {
+  let userId: string | undefined
+  let vaultKeyId = 'unknown'
+  let ip: string | null = null
+
   try {
     const user = await requireUser()
+    userId = user.id
+    ip = await extractClientIp()
     const db = getAdminSupabase()
 
     // Check for existing account
@@ -32,6 +39,7 @@ export async function provisionAccount(): Promise<{
 
     // 1. Provision signing key in KMS
     const keyInfo = await vault.provisionSigningKey(user.id)
+    vaultKeyId = keyInfo.keyId
 
     // 2. Open Hedera account
     const accountId = await ledger.openAccount(keyInfo.publicKeyHex)
@@ -55,16 +63,13 @@ export async function provisionAccount(): Promise<{
     // 5. Initialize rate limits
     await db.from(DB.RATE_LIMITS).insert({ user_id: user.id })
 
-    // 6. Audit log
-    const ip = await extractClientIp()
-    await db.from(DB.AUDIT_LOG).insert({
-      user_id: user.id,
-      op_type: 'account_create',
-      op_params: { account_id: accountId },
-      vault_key_id: keyInfo.keyId,
-      client_ip: ip,
-      result: 'success',
-    })
+    // 6. Audit log (success)
+    await recordAuditLog(
+      { userId: user.id, vaultKeyId: keyInfo.keyId, ip },
+      'account_create',
+      { account_id: accountId },
+      {}
+    ).catch((err) => console.warn('[audit] insert failed:', err))
 
     return {
       success: true,
@@ -78,6 +83,14 @@ export async function provisionAccount(): Promise<{
     }
   } catch (err: any) {
     console.error('[provisionAccount]', err)
+    if (userId) {
+      await recordAuditLog(
+        { userId, vaultKeyId, ip },
+        'account_create',
+        {},
+        { error: err.message }
+      ).catch(() => {})
+    }
     return { success: false, error: err.message || 'Account creation failed' }
   }
 }
