@@ -145,7 +145,7 @@ Gas is **never deducted on failed swaps** — if a swap reverts (slippage, liqui
 | **Smart Contracts** | Solidity 0.8.24 + OpenZeppelin 5.x | DCA logic, UUPS proxy, security |
 | **Blockchain** | Hedera (EVM-compatible) | L1 execution + HIP-1215 scheduling |
 | **DEX** | SaucerSwap (Uniswap V2 interface) | Token swaps |
-| **Frontend** | Next.js 15, React 19, TypeScript | User dashboard |
+| **Frontend** | Next.js 16, React 19, TypeScript | User dashboard + audit log |
 | **UI** | Tailwind CSS 4 + shadcn/ui | Component library |
 | **Database** | Supabase (PostgreSQL) | User accounts, position metadata, audit log |
 | **Auth** | Supabase Auth | Email/password + OAuth |
@@ -238,19 +238,77 @@ Key security measures:
 - Key disable/rotation supported without affecting other users
 - Full audit trail via AWS CloudTrail
 
+### Key Rotation
+
+Users can rotate their signing key from the Dashboard. The process uses **dual-key signing** — Hedera requires signatures from both the old and new key for `AccountUpdateTransaction`:
+
+```
+1. Create new KMS key (secp256k1)
+2. Build AccountUpdateTransaction with new key
+3. Sign with OLD key via KMS
+4. Sign with NEW key via KMS
+5. Execute on Hedera (both signatures validated)
+6. Update database (new key ID, ARN, public key, EVM address)
+7. Disable old KMS key (never deleted — preserves audit trail)
+8. Record audit log with old/new key details
+```
+
+- **Hedera Account ID stays the same** — only the signing key changes
+- **EVM address changes** — it's derived from the public key (`keccak256(pubkey[1:])[-20:]`)
+- **Old keys are disabled, never deleted** — this preserves the full audit trail and prevents accidental reuse
+- **Rate limited** — rotation counts toward the per-user operation limits
+
+### Audit Logging System
+
+A dual-layer audit system tracks every signing operation for compliance and forensic analysis:
+
+**Application-level audit** (`dca_audit_log` table):
+- Every mutating operation is recorded (success AND failure)
+- Captures: user ID, operation type, parameters, KMS key ID, tx hash, client IP, timestamps
+- Row-Level Security ensures users can only view their own logs
+- Audit log is **immutable from client side** — only the service role can insert
+
+**Operation types tracked:**
+| Operation | Trigger |
+|-----------|---------|
+| `account_create` | User provisions a new Hedera account |
+| `dca_create` | New DCA position created |
+| `dca_stop` | Position stopped by user |
+| `dca_withdraw` | Tokens withdrawn from position |
+| `dca_topup` | Position topped up with more tokens/gas |
+| `gas_deposit` | HBAR deposited to scheduler |
+| `gas_withdraw` | HBAR withdrawn from scheduler |
+| `unwrap_whbar` | WHBAR unwrapped to HBAR |
+| `key_rotation` | Signing key rotated |
+
+**Rate limiting:**
+- Per-user hourly and daily operation limits (configurable via env vars)
+- Checked before every mutating operation
+- Atomic counter increment via Postgres RPC function
+
+**Activity Log UI** (`/audit`):
+- Filterable table with operation type, status, and date range filters
+- Color-coded status badges (success/failed)
+- Expandable rows showing transaction params, KMS key ID, IP, and errors
+- Copy buttons for tx hashes and key IDs
+- HashScan links to view transactions on-chain
+- Load-more pagination
+
 ---
 
 ## Project Structure
 
 ```
 dca-swap/
-├── app/                        # Next.js 15 app directory
+├── app/                        # Next.js 16 app directory
 │   ├── (auth)/                 # Login, signup, OAuth callback
-│   ├── (dashboard)/            # Dashboard, DCA positions
-│   └── actions/                # Server actions (auth, dca, vault)
+│   ├── (dashboard)/            # Dashboard, DCA positions, audit log
+│   │   └── audit/              # Activity Log page
+│   └── actions/                # Server actions (auth, dca, vault, audit)
 ├── components/                 # React components
 │   ├── auth/                   # Login/signup forms
-│   ├── dashboard/              # Account, stats, gas balance
+│   ├── audit/                  # Audit log table & filters
+│   ├── dashboard/              # Account (+ key rotation), stats, gas balance
 │   ├── dca/                    # Position management UI
 │   └── ui/                     # shadcn/ui components
 ├── contracts/                  # Solidity smart contracts
@@ -261,17 +319,19 @@ dca-swap/
 │   └── mocks/                  # Test doubles
 ├── lib/                        # Backend services
 │   ├── services/
-│   │   ├── dca-service.ts      # Hedera SDK operations
+│   │   ├── dca-service.ts      # Hedera SDK operations + key rotation
 │   │   ├── vault-service.ts    # AWS KMS key management
 │   │   └── ledger-service.ts   # Hedera account creation
 │   ├── supabase/               # Database clients
+│   ├── utils/                  # Audit logging, rate limiting, crypto
 │   └── constants/              # Token addresses & metadata
+├── supabase/migrations/        # Database migrations (RLS, constraints)
 ├── test/                       # Hardhat test suite
 ├── scripts/                    # Deploy & upgrade scripts
 ├── store/                      # Zustand state stores
-├── hooks/                      # React hooks
+├── hooks/                      # React hooks (DCA, session, audit)
 ├── types/                      # TypeScript definitions
-└── docs/plans/                 # Architecture & audit docs
+└── docs/                       # Architecture, plans & audit docs
 ```
 
 ---
@@ -319,6 +379,8 @@ npm run dev
 | `AWS_ACCESS_KEY_ID` | AWS credentials for KMS |
 | `AWS_SECRET_ACCESS_KEY` | AWS credentials for KMS |
 | `AWS_KMS_REGION` | KMS region (default: us-east-1) |
+| `CUSTODIAL_MAX_OPS_PER_HOUR` | Rate limit: max operations per hour (default: 10) |
+| `CUSTODIAL_MAX_OPS_PER_DAY` | Rate limit: max operations per day (default: 50) |
 
 ---
 
