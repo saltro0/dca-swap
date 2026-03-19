@@ -400,30 +400,79 @@ export async function fetchUserPositions(): Promise<{
           : "0";
         let lastExecutedAt = 0;
         let status = row.status as DCAPositionSummary["status"];
+        let onChainResolved = false;
 
         // Read on-chain state (skip for withdrawn — data is deleted on-chain)
         if (status !== "withdrawn") {
           try {
             const onChain = await dcaService.getPosition(row.position_id);
             if (onChain) {
+              onChainResolved = true;
               executionsLeft = Number(onChain.executionsLeft);
               executionsDone = Number(onChain.executionsDone);
               tokenInBalance = formatRawAmount(onChain.tokenInBalance, tokenInDecimals);
               tokenOutAccum = formatRawAmount(onChain.tokenOutAccum, tokenOutDecimals);
               lastExecutedAt = Number(onChain.lastExecutedAt);
 
-              // Sync DB if position deactivated on-chain
+              // Sync DB with on-chain data
+              const dbUpdate: Record<string, unknown> = {};
+
               if (!onChain.active && status === "active") {
                 status = executionsLeft === 0 ? "exhausted" : "stopped";
+                dbUpdate.status = status;
+              }
+
+              if (executionsDone !== (row.executions_done ?? 0)) {
+                dbUpdate.executions_done = executionsDone;
+              }
+              if (onChain.tokenOutAccum.toString() !== (row.token_out_accum ?? "0")) {
+                dbUpdate.token_out_accum = onChain.tokenOutAccum.toString();
+              }
+
+              if (Object.keys(dbUpdate).length > 0) {
+                dbUpdate.updated_at = new Date().toISOString();
                 await supabase
                   .from(DB.DCA_POSITIONS)
-                  .update({ status, updated_at: new Date().toISOString() })
+                  .update(dbUpdate)
                   .eq("position_id", row.position_id)
                   .eq("user_id", user.id);
               }
             }
           } catch {
-            // Fallback to DB data if on-chain read fails
+            // On-chain read failed — will fall through to mirror node
+          }
+        }
+
+        // Fallback: query Mirror Node execution events (works for withdrawn + failed on-chain reads)
+        if (!onChainResolved) {
+          const stats = await fetchExecutionStats(row.position_id, tokenOutDecimals);
+          if (stats && stats.executionsDone > 0) {
+            executionsDone = stats.executionsDone;
+            executionsLeft = Math.max(0, (row.max_executions ?? 0) - executionsDone);
+            tokenOutAccum = formatRawAmount(stats.tokenOutAccumRaw, tokenOutDecimals);
+
+            // Sync DB
+            const dbUpdate: Record<string, unknown> = {
+              updated_at: new Date().toISOString(),
+            };
+            if (executionsDone !== (row.executions_done ?? 0)) {
+              dbUpdate.executions_done = executionsDone;
+            }
+            if (stats.tokenOutAccumRaw.toString() !== (row.token_out_accum ?? "0")) {
+              dbUpdate.token_out_accum = stats.tokenOutAccumRaw.toString();
+            }
+            // Auto-detect exhausted status
+            if (status === "active" && executionsLeft === 0) {
+              status = "exhausted";
+              dbUpdate.status = status;
+            }
+            if (Object.keys(dbUpdate).length > 1) {
+              await supabase
+                .from(DB.DCA_POSITIONS)
+                .update(dbUpdate)
+                .eq("position_id", row.position_id)
+                .eq("user_id", user.id);
+            }
           }
         }
 
@@ -481,29 +530,78 @@ export async function fetchPositionDetail(
       : "0";
     let lastExecutedAt = 0;
     let status = row.status as DCAPositionSummary["status"];
+    let onChainResolved = false;
 
     // Read on-chain state (skip for withdrawn — data is deleted on-chain)
     if (status !== "withdrawn") {
       try {
         const onChain = await dcaService.getPosition(positionId);
         if (onChain) {
+          onChainResolved = true;
           executionsLeft = Number(onChain.executionsLeft);
           executionsDone = Number(onChain.executionsDone);
           tokenInBalance = formatRawAmount(onChain.tokenInBalance, tokenInDecimals);
           tokenOutAccum = formatRawAmount(onChain.tokenOutAccum, tokenOutDecimals);
           lastExecutedAt = Number(onChain.lastExecutedAt);
 
+          // Sync DB with on-chain data
+          const dbUpdate: Record<string, unknown> = {};
+
           if (!onChain.active && status === "active") {
             status = executionsLeft === 0 ? "exhausted" : "stopped";
+            dbUpdate.status = status;
+          }
+
+          if (executionsDone !== (row.executions_done ?? 0)) {
+            dbUpdate.executions_done = executionsDone;
+          }
+          if (onChain.tokenOutAccum.toString() !== (row.token_out_accum ?? "0")) {
+            dbUpdate.token_out_accum = onChain.tokenOutAccum.toString();
+          }
+
+          if (Object.keys(dbUpdate).length > 0) {
+            dbUpdate.updated_at = new Date().toISOString();
             await supabase
               .from(DB.DCA_POSITIONS)
-              .update({ status, updated_at: new Date().toISOString() })
+              .update(dbUpdate)
               .eq("position_id", positionId)
               .eq("user_id", user.id);
           }
         }
       } catch {
-        // Fallback to DB data
+        // On-chain read failed — will fall through to mirror node
+      }
+    }
+
+    // Fallback: query Mirror Node execution events (works for withdrawn + failed on-chain reads)
+    if (!onChainResolved) {
+      const stats = await fetchExecutionStats(positionId, tokenOutDecimals);
+      if (stats && stats.executionsDone > 0) {
+        executionsDone = stats.executionsDone;
+        executionsLeft = Math.max(0, (row.max_executions ?? 0) - executionsDone);
+        tokenOutAccum = formatRawAmount(stats.tokenOutAccumRaw, tokenOutDecimals);
+
+        // Sync DB
+        const dbUpdate: Record<string, unknown> = {
+          updated_at: new Date().toISOString(),
+        };
+        if (executionsDone !== (row.executions_done ?? 0)) {
+          dbUpdate.executions_done = executionsDone;
+        }
+        if (stats.tokenOutAccumRaw.toString() !== (row.token_out_accum ?? "0")) {
+          dbUpdate.token_out_accum = stats.tokenOutAccumRaw.toString();
+        }
+        if (status === "active" && executionsLeft === 0) {
+          status = "exhausted";
+          dbUpdate.status = status;
+        }
+        if (Object.keys(dbUpdate).length > 1) {
+          await supabase
+            .from(DB.DCA_POSITIONS)
+            .update(dbUpdate)
+            .eq("position_id", positionId)
+            .eq("user_id", user.id);
+        }
       }
     }
 
@@ -594,6 +692,43 @@ const SWAP_EXECUTED_TOPIC =
   "0x3ba16738f12bfd0daedccb776cd79d883720a59aaeb01266e36a510f8fdf8bc5";
 
 const DCA_REGISTRY_CONTRACT_ID = process.env.DCA_REGISTRY_CONTRACT_ID || "";
+
+/**
+ * Query Mirror Node for execution count and total accumulated output
+ * for a given position. This works even after withdrawal (events persist).
+ */
+async function fetchExecutionStats(
+  positionId: number,
+  tokenOutDecimals: number
+): Promise<{ executionsDone: number; tokenOutAccumRaw: bigint } | null> {
+  try {
+    const positionTopic = "0x" + positionId.toString(16).padStart(64, "0");
+    const url = `${MIRROR_BASE}/api/v1/contracts/${DCA_REGISTRY_CONTRACT_ID}/results/logs?limit=100&order=desc`;
+
+    const res = await fetch(url);
+    if (!res.ok) return null;
+
+    const allData = await res.json();
+    const logs = (allData.logs ?? []).filter(
+      (log: any) =>
+        log.topics?.[0] === SWAP_EXECUTED_TOPIC &&
+        log.topics?.[1] === positionTopic
+    );
+
+    let tokenOutAccumRaw = 0n;
+    for (const log of logs) {
+      const d = (log.data ?? "").replace("0x", "");
+      // Slot 1 = tokenOutReceived
+      if (d.length >= 128) {
+        tokenOutAccumRaw += BigInt("0x" + d.slice(64, 128));
+      }
+    }
+
+    return { executionsDone: logs.length, tokenOutAccumRaw };
+  } catch {
+    return null;
+  }
+}
 
 export async function fetchExecutionHistory(
   positionId: number
